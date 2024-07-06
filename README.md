@@ -1,6 +1,4 @@
-# image-synthesis
-
-Texture and image synthesis experiments
+# Texture and image synthesis experiments
 
 ## MarkovJunior
 
