@@ -1,0 +1,424 @@
+<html>
+    <head>
+        <style>
+         #screen {
+             width: 256px;
+             height: 256px;
+             background-color: #000000;
+         }
+        </style>
+    </head>
+    <body>
+        <canvas id="screen" width="256" height="256"></canvas>
+
+        <script>
+         function Node(id, char, parent) {
+             this.id = id;
+             this.char = char;
+             this.parent = parent;
+
+             this.children = new Map();
+             this.transitions = new Map();
+             this.patterns = [];
+         }
+
+         Node.prototype.getChild = function(char) {
+             return this.children.get(char);
+         };
+
+         Node.prototype.setChild = function(char, node) {
+             this.children.set(char, node);
+         };
+
+         Node.prototype.getChildren = function() {
+             return this.children.values();
+         };
+
+         Node.prototype.getPatterns = function() {
+             return this.patterns;
+         };
+
+         Node.prototype.addPattern = function(pattern, patternIndex) {
+             this.patterns.push({ pattern, patternIndex });
+         };
+
+         Node.prototype.getTransition = function(char) {
+             return this.transitions.get(char);
+         };
+
+         Node.prototype.setTransition = function(char, node) {
+             this.transitions.set(char, node);
+         };
+
+         Node.prototype.setTransitionsFrom = function(node) {
+             this.transitions = new Map([...node.transitions, ...node.children]);
+             this.patterns.push(...node.patterns);
+         };
+
+         function Scanner2D(patterns) {
+             // Aho-Corasick
+             this.lastNodeId = 0;
+             this.root = new Node(this.lastNodeId, null, null);
+
+             this.terminalNodeIds = this.buildTrie(patterns);
+             this.buildTransitions();
+             return this;
+         }
+
+         Scanner2D.prototype.getTerminalNodeIds = function() {
+             return this.terminalNodeIds;
+         };
+
+         Scanner2D.prototype.buildTrie = function(patterns) {
+             return patterns.map((pattern, patternIndex) => this.addPattern(pattern, patternIndex));
+         };
+
+         Scanner2D.prototype.addPattern = function(pattern, patternIndex) {
+             validatePattern2D(pattern);
+
+             let position = 0;
+             let currentNode = this.root;
+
+             for (const char of pattern) {
+                 const child = currentNode.getChild(char);
+                 if (!child) {
+                     break;
+                 }
+
+                 currentNode = child;
+                 position += 1;
+             }
+
+             for (const char of pattern.slice(position)) {
+                 currentNode = this.addNode(char, currentNode);
+             }
+
+             currentNode.addPattern(pattern, patternIndex);
+
+             return currentNode.id;
+         };
+
+         Scanner2D.prototype.addNode = function(char, parent) {
+             this.lastNodeId += 1;
+             const node = new Node(this.lastNodeId, char, parent);
+             parent.setChild(char, node);
+
+             return node;
+         };
+
+         function validatePattern2D(pattern) {
+             if (pattern.length === 0) {
+                 throw new Error("Pattern's length must be greater than 0");
+             }
+         }
+
+         function toOccurrences2D(node, position) {
+             return node.getPatterns().map(({ pattern, patternIndex }) => ({
+                 pattern,
+                 patternIndex,
+                 position: position - pattern.length + 1,
+             }));
+         };
+
+         Scanner2D.prototype.match = function(text) {
+             const occurrences = [];
+             const visitedNodeIds = [];
+             let currentNode = this.root;
+
+             for (const [position, char] of text.entries()) {
+                 currentNode = currentNode.getTransition(char) ?? this.root;
+                 occurrences.push(...toOccurrences2D(currentNode, position));
+                 visitedNodeIds.push(currentNode.id);
+             }
+
+             return { occurrences, visitedNodeIds };
+         };
+
+         Scanner2D.prototype.buildTransitions = function() {
+             const queue = [...this.root.getChildren()];
+
+             while (queue.length) {
+                 const currentNode = queue.shift();
+                 queue.push(...currentNode.getChildren());
+
+                 const parent = currentNode.parent;
+                 const charFromParent = currentNode.char;
+                 const prevNode = parent.getTransition(charFromParent) ?? this.root;
+
+                 parent.setTransition(charFromParent, currentNode);
+                 currentNode.setTransitionsFrom(prevNode);
+             }
+         };
+
+         function toDimension(matrix) {
+             return {
+                 rowsCount: matrix.length,
+                 colsCount: matrix[0].length,
+             };
+         };
+
+         function transpose(matrix) {
+             return matrix[0].map((_, i) => matrix.map((row) => row[i]));
+         };
+
+         function toOccurrences3D(matchResult, patterns, columnIndex) {
+             return matchResult.occurrences.map(occurrence => ({
+                 pattern: patterns[occurrence.patternIndex],
+                 patternIndex: occurrence.patternIndex,
+                 col: columnIndex,
+                 row: occurrence.position,
+             }));
+         };
+
+         function validateMatrix(matrix) {
+             const { rowsCount, colsCount } = toDimension(matrix);
+
+             if (rowsCount === 0 || colsCount === 0) {
+                 throw new Error('Number of rows and columns must be greater than 0');
+             }
+
+             if (matrix.some((row) => row.length !== colsCount)) {
+                 throw new Error('Number of elements in each row must be the same');
+             }
+         };
+
+         function areOfTheSameDimension(matrices) {
+             const dimension = toDimension(matrices[0] ?? []);
+
+             return matrices.slice(1).every((matrix) => {
+                 const { rowsCount, colsCount } = toDimension(matrix);
+                 return (
+                     rowsCount === dimension.rowsCount && colsCount === dimension.colsCount
+                 );
+             });
+         };
+
+         function validatePatterns(patterns) {
+             if (patterns.length === 0) {
+                 throw new Error('At least one pattern must be provided');
+             }
+
+             if (!areOfTheSameDimension(patterns)) {
+                 throw new Error('All patterns must be of the same dimension');
+             }
+
+             patterns.forEach(validateMatrix);
+         };
+
+         function Scanner3D(patterns) {
+             // Baker-Bird
+             validatePatterns(patterns);
+
+             this.patterns = patterns;
+
+             this.scanner2D = new Scanner2D(patterns.flat());
+             this.patternsDimension = toDimension(this.patterns[0]);
+             return this;
+         }
+
+         Scanner3D.prototype.match = function(text) {
+             validateMatrix(text);
+
+             const visitedNodeIds = text.map(row => this.toVisitedNodeIds(row));
+             const nodeIdsScanner2D = this.buildNodeIdsScanner2D();
+
+             return transpose(visitedNodeIds)
+                 .slice(this.patternsDimension.colsCount - 1)
+                 .flatMap((column, columnIndex) => toOccurrences3D(
+                     nodeIdsScanner2D.match(column),
+                     this.patterns,
+                     columnIndex));
+         };
+
+         Scanner3D.prototype.toVisitedNodeIds = function(row) {
+             return this.scanner2D.match(row).visitedNodeIds;
+         };
+
+         Scanner3D.prototype.buildNodeIdsScanner2D = function() {
+             const terminalNodeIds = this.scanner2D.getTerminalNodeIds();
+             const { rowsCount } = this.patternsDimension;
+
+             return new Scanner2D(
+                 this.patterns.map((_, i) =>
+                     terminalNodeIds.slice(i * rowsCount, (i + 1) * rowsCount)
+                 )
+             );
+         };
+
+         async function start() {
+             // . => W
+             let pattern1 = [
+                 {
+                     rule: new Scanner3D([
+                         ['.']
+                     ]),
+                     replace: ['r']
+                 }
+             ]
+
+             // W. => WW
+             let pattern2 = [
+                 {
+                     rule: new Scanner3D([
+                         [ ['r', '.'] ],
+                         [ ['.', 'r'] ]
+                     ]),
+                     replace: [ ['r', 'r' ] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['r'], ['.'] ],
+                         [ ['.'], ['r'] ],
+                     ]),
+                     replace: [ ['r'], ['r'] ]
+                 }
+             ]
+
+             // R.. => GGR
+             // RGG => WWR
+             let pattern3 = [
+                 {
+                     rule: new Scanner3D([
+                         [ ['r', '.', '.'] ],
+                     ]),
+                     replace: [ ['g', 'g', 'r' ] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['.', '.', 'r'] ],
+                     ]),
+                     replace: [ ['r', 'g', 'g' ] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['r'], ['.'], ['.'] ],
+                     ]),
+                     replace: [ ['g'], ['g'], ['r'] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['.'], ['.'], ['r'] ],
+                     ]),
+                     replace: [ ['r'], ['g'], ['g'] ]
+                 }
+             ]
+
+             let pattern4 = [
+                 {
+                     rule: new Scanner3D([
+                         [ ['r', 'g', 'g'] ],
+                     ]),
+                     replace: [ ['w', 'w', 'r' ] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['g', 'g', 'r'] ],
+                     ]),
+                     replace: [ ['r', 'w', 'w' ] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['r'], ['g'], ['g'] ],
+                     ]),
+                     replace: [ ['w'], ['w'], ['r'] ]
+                 },
+                 {
+                     rule: new Scanner3D([
+                         [ ['g'], ['g'], ['r'] ],
+                     ]),
+                     replace: [ ['r'], ['w'], ['w'] ]
+                 }
+             ]
+
+             let index = 0;
+             let counter = 0;
+
+             let patterns = pattern3;
+
+             const width = 64;
+             const height = 64;
+             const text3d = Array(height).fill('.').map(el => Array(width).fill('.'));
+             text3d[height / 2][width / 2] = 'r';
+
+             const canvas = document.getElementById('screen');
+             const ctx = canvas.getContext('2d');
+             ctx.scale(4, 4);
+             let matches = [];
+
+             //await new Promise(r => setTimeout(r, 1000));
+
+             while (true) {
+                 matches = patterns.map(pattern => {
+                     return pattern.rule.match(text3d).map(match => {
+                         return {
+                             match: match,
+                             replace: pattern.replace
+                         }
+                     })
+                 }).flat()
+
+                 /* for (let i = 0; i < height; i++) {
+                  *     for (let j = 0; j < width; j++) {
+                  *         if (text3d[j][i] === '.') {
+                  *             ctx.fillStyle = "rgba(0,0,0,1)";
+                  *         } else if (text3d[j][i] === 'w') {
+                  *             ctx.fillStyle = "rgba(255,200,0,1)";
+                  *         } else if (text3d[j][i] === 'g') {
+                  *             ctx.fillStyle = "rgba(0,255,0,1)";
+                  *         } else if (text3d[j][i] === 'r') {
+                  *             ctx.fillStyle = "rgba(255,0,0,1)";
+                  *         }
+
+                  *         ctx.fillRect(j, i, 1, 1);
+                  *     }
+                  * } */
+
+                 // pattern1, pattern2
+                 /* if (matches.length === 0) break; */
+
+                 // pattern3, pattern4
+                 if (matches.length === 0) {
+                     index = 1 - index;
+                     patterns = index === 0 ? pattern3 : pattern4
+                     counter += 1;
+                     if (counter >= 2) break;
+                     continue;
+                 }
+                 counter = 0;
+                 index = 0;
+                 patterns = index === 0 ? pattern3 : pattern4
+
+                 await new Promise(r => setTimeout(r, 1));
+
+                 const rand = Math.floor(Math.random()*matches.length)
+                 const match = matches[rand];
+
+                 for (let i = 0; i < match.replace.length; i++) {
+                     for (let j = 0; j < match.replace[0].length; j++) {
+                         const char = match.replace[i][j];
+                         text3d[match.match.row + i][match.match.col + j] = char;
+
+                         if (char === '.') {
+                             ctx.fillStyle = "rgba(0,0,0,1)";
+                         } else if (char === 'w') {
+                             ctx.fillStyle = "rgba(255,200,0,1)";
+                         } else if (char === 'g') {
+                             ctx.fillStyle = "rgba(0,255,0,1)";
+                         } else if (char === 'r') {
+                             ctx.fillStyle = "rgba(255,0,0,1)";
+                         }
+
+                         ctx.fillRect(match.match.col + j, match.match.row + i, 1, 1);
+                     }
+                 }
+             }
+
+             console.log('done')
+         }
+
+         start();
+
+        </script>
+
+    </body>
+</html>
