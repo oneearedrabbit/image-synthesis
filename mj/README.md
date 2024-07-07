@@ -14,6 +14,7 @@ Output:
 
 ![image](https://raw.githubusercontent.com/oneearedrabbit/image-synthesis/master/mj/output.gif)
 
-References:
+## References
+
 - MarkovJunior: https://github.com/mxgmn/MarkovJunior
 - Baker-Bird: https://github.com/marcinbialkowski/baker-bird/
