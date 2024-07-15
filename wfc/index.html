@@ -1,0 +1,318 @@
+<html>
+    <head>
+    </head>
+    <body>
+        <canvas id="screen" width="512" height="512"></canvas>
+
+        <script type="text/javascript">
+         const HALF_PI = Math.PI / 2;
+
+         const canvas = document.getElementById('screen');
+         const ctx = canvas.getContext('2d');
+
+         async function loadImageAsImageData(url) {
+             // Fetch the image from the remote URL
+             const response = await fetch(url);
+             const blob = await response.blob();
+             const imageUrl = URL.createObjectURL(blob);
+
+             const img = new Image();
+
+             return new Promise((resolve, reject) => {
+                 img.onload = () => {
+                     const canvas = document.createElement('canvas');
+                     const ctx = canvas.getContext('2d');
+
+                     canvas.width = img.width;
+                     canvas.height = img.height;
+
+                     ctx.drawImage(img, 0, 0);
+
+                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                     // Clean up object URLs and resolve the promise
+                     URL.revokeObjectURL(imageUrl);
+
+                     resolve(imageData);
+                 };
+
+                 img.onerror = (error) => {
+                     reject(error);
+                 };
+
+                 // Set the source of the image, triggering the load
+                 img.src = imageUrl;
+             });
+         }
+
+         function rotateImageData(imageData, num) {
+             const width = imageData.width;
+             const height = imageData.height;
+
+             // Create an off-screen canvas for drawing the original image data
+             const offScreenCanvas = document.createElement('canvas');
+             offScreenCanvas.width = width;
+             offScreenCanvas.height = height;
+             const offScreenCtx = offScreenCanvas.getContext('2d');
+
+             // Put the original ImageData into the off-screen canvas
+             offScreenCtx.putImageData(imageData, 0, 0);
+
+             // Create another off-screen canvas for the rotated image
+             const rotatedCanvas = document.createElement('canvas');
+             rotatedCanvas.width = height;  // Note height and width are swapped
+             rotatedCanvas.height = width;  // Note width and height are swapped
+             const rotatedCtx = rotatedCanvas.getContext('2d');
+
+             // Rotate the canvas
+             rotatedCtx.translate(rotatedCanvas.width / 2, rotatedCanvas.height / 2);
+             rotatedCtx.rotate(HALF_PI * num);
+             rotatedCtx.drawImage(offScreenCanvas, -width / 2, -height / 2);
+
+             // Extract the rotated ImageData
+             const rotatedImageData = rotatedCtx.getImageData(0, 0, rotatedCanvas.width, rotatedCanvas.height);
+
+             return rotatedImageData;
+         }
+
+         class Cell {
+             constructor(i, j, value) {
+                 this.i = i;
+                 this.j = j;
+                 this.options = Array(value).fill().map((_, i) => i);
+                 this.collapsed = this.options.length === 1;
+             }
+
+             draw(w, h) {
+                 if (this.collapsed) {
+                     const index = this.options[0];
+                     ctx.putImageData(tiles[index].img, this.i * w, this.j * h, 0, 0, w, h);
+                 } else {
+                     ctx.beginPath();
+                     ctx.rect(this.i * w, this.j * h, w, h);
+                     ctx.fill();
+                 }
+             }
+
+             validOptions(dir) {
+                 const validOptions = new Set();
+                 for (let option of this.options) {
+                     let valid = tiles[option].compatibles(dir);
+                     for (let opt of valid) {
+                         validOptions.add(opt)
+                     }
+                 }
+                 return validOptions;
+             }
+         }
+
+         function compatibleEdges(a, b) {
+             return a == b.split('').reverse().join('');
+         }
+
+         const UP = 0;
+         const RIGHT = 1;
+         const DOWN = 2;
+         const LEFT = 3;
+
+         class Tile {
+             constructor(img, edges, i) {
+                 this.img = img;
+                 this.edges = edges;
+                 this.up = [];
+                 this.right = [];
+                 this.down = [];
+                 this.left = [];
+
+                 if (i == undefined) this.index = i;
+             }
+
+             analyze(tiles) {
+                 for (let i = 0; i < tiles.length; i++) {
+                     const tile = tiles[i];
+
+                     if (compatibleEdges(tile.edges[DOWN], this.edges[UP])) this.up.push(i);
+                     if (compatibleEdges(tile.edges[LEFT], this.edges[RIGHT])) this.right.push(i);
+                     if (compatibleEdges(tile.edges[UP], this.edges[DOWN])) this.down.push(i);
+                     if (compatibleEdges(tile.edges[RIGHT], this.edges[LEFT])) this.left.push(i);
+                 }
+             }
+
+             compatibles(dir) {
+                 switch (dir) {
+                         case UP: return this.up;
+                         case RIGHT: return this.right;
+                         case DOWN: return this.down;
+                         case LEFT: return this.left;
+                 }
+             }
+
+             rotate(num) {
+                 const w = this.img.width;
+                 const h = this.img.height;
+                 const newImg = rotateImageData(this.img, num);
+                 const len = this.edges.length
+                 const newEdges = Array(len).fill().map((_, i) => this.edges[(i - num + len) % len]);
+                 return new Tile(newImg, newEdges, this.index);
+             }
+         }
+
+         const tileImages = [];
+
+         let tiles = [];
+         let grid = [];
+
+         const DIM = 32;
+         const NB_UPDATES_PER_TICK = 1;
+
+         function removeDuplicatedTiles(tiles) {
+             const uniqueTilesMap = {};
+             for (const tile of tiles) {
+                 const key = tile.edges.join(',');
+                 uniqueTilesMap[key] = tile;
+             }
+             return Object.values(uniqueTilesMap);
+         }
+
+         function reset() {
+             for (let i = 0; i < DIM * DIM; i++) {
+                 grid[i] = new Cell(i % DIM, Math.floor(i / DIM), tiles.length);
+             }
+         }
+
+         function checkValid(arr, valid) {
+             for (let i = arr.length - 1; i >= 0; i--) {
+                 // VALID: [BLANK, RIGHT]
+                 // ARR: [BLANK, UP, RIGHT, DOWN, LEFT]
+                 // result in removing UP, DOWN, LEFT
+                 const element = arr[i];
+                 if (!valid.has(element)) arr.splice(i, 1);
+             }
+         }
+
+         function posIdx(i, j) {
+             return i + j * DIM;
+         }
+
+         function draw() {
+             const w = canvas.width / DIM;
+             const h = canvas.height / DIM;
+             for (let j = 0; j < DIM; j++) {
+                 for (let i = 0; i < DIM; i++) {
+                     grid[posIdx(i, j)].draw(w, h);
+                 }
+             }
+
+             for (let idxUpdate = 0; idxUpdate < NB_UPDATES_PER_TICK; idxUpdate++) {
+                 let gridCopy = grid.slice();
+                 gridCopy = gridCopy.filter(a => !a.collapsed);
+
+                 if (gridCopy.length === 0) return;
+                 gridCopy.sort((a, b) => a.options.length - b.options.length);
+
+                 const len = gridCopy[0].options.length;
+                 let stopIndex = 0;
+                 for (let i = 1; i < gridCopy.length; i++) {
+                     if (gridCopy[i].options.length > len) {
+                         stopIndex = i;
+                         break;
+                     }
+                 }
+
+                 if (stopIndex > 0) gridCopy.splice(stopIndex);
+                 const cell = gridCopy[Math.floor(Math.random() * gridCopy.length)];
+                 cell.collapsed = true;
+                 const pick = cell.options[Math.floor(Math.random() * cell.options.length)];
+
+                 if (pick === undefined) {
+                     return;
+                 }
+
+                 cell.options = [pick];
+
+                 grid = optimizedNextGrid(cell);
+             }
+
+             return true;
+         }
+
+         function propagate(src, dest, dir) {
+             const oldLen = dest.options.length;
+             checkValid(dest.options, src.validOptions(dir));
+             return oldLen !== dest.options.length;
+         }
+
+         function checkCell(cell, touched, i, j, dir) {
+             const idx = posIdx(i, j);
+             if (propagate(cell, grid[idx], dir) && !touched.includes(idx)) touched.push(idx);
+         }
+
+         function optimizedNextGrid(pick) {
+             const touched = [posIdx(pick.i, pick.j)];
+
+             while (touched.length > 0) {
+                 const cell = grid[touched.pop()];
+
+                 if (cell.j > 0) checkCell(cell, touched, cell.i, cell.j - 1, UP);
+                 if (cell.i < DIM - 1) checkCell(cell, touched, cell.i + 1, cell.j, RIGHT);
+                 if (cell.j < DIM - 1) checkCell(cell, touched, cell.i, cell.j + 1, DOWN);
+                 if (cell.i > 0) checkCell(cell, touched, cell.i - 1, cell.j, LEFT);
+             }
+
+             return grid;
+         }
+
+         const MAX_TILES = 13;
+         const path = 'tiles';
+         const loadPromises = Array(MAX_TILES).fill().map((_, i) =>
+             loadImageAsImageData(`${path}/_resized/${i}.png`).then(data => tileImages[i] = data)
+         )
+
+         Promise.all(loadPromises).then(async _ => {
+             // Loaded and created the tiles
+             tiles[0] = new Tile(tileImages[0], ['AAA', 'AAA', 'AAA', 'AAA']);
+             tiles[1] = new Tile(tileImages[1], ['BBB', 'BBB', 'BBB', 'BBB']);
+             tiles[2] = new Tile(tileImages[2], ['BBB', 'BCB', 'BBB', 'BBB']);
+             tiles[3] = new Tile(tileImages[3], ['BBB', 'BDB', 'BBB', 'BDB']);
+             tiles[4] = new Tile(tileImages[4], ['ABB', 'BCB', 'BBA', 'AAA']);
+             tiles[5] = new Tile(tileImages[5], ['ABB', 'BBB', 'BBB', 'BBA']);
+             tiles[6] = new Tile(tileImages[6], ['BBB', 'BCB', 'BBB', 'BCB']);
+             tiles[7] = new Tile(tileImages[7], ['BDB', 'BCB', 'BDB', 'BCB']);
+             tiles[8] = new Tile(tileImages[8], ['BDB', 'BBB', 'BCB', 'BBB']);
+             tiles[9] = new Tile(tileImages[9], ['BCB', 'BCB', 'BBB', 'BCB']);
+             tiles[10] = new Tile(tileImages[10], ['BCB', 'BCB', 'BCB', 'BCB']);
+             tiles[11] = new Tile(tileImages[11], ['BCB', 'BCB', 'BBB', 'BBB']);
+             tiles[12] = new Tile(tileImages[12], ['BBB', 'BCB', 'BBB', 'BCB']);
+
+             for (let i = 0; i < MAX_TILES; i++) {
+                 tiles[i].index = i
+             }
+
+             const initialTileCount = tiles.length;
+             for (let i = 0; i < initialTileCount; i++) {
+                 let tempTiles = [
+                     tiles[i].rotate(0),
+                     tiles[i].rotate(1),
+                     tiles[i].rotate(2),
+                     tiles[i].rotate(3)
+                 ];
+                 tempTiles = removeDuplicatedTiles(tempTiles);
+                 tiles = tiles.concat(tempTiles);
+             }
+
+             for (const tile of tiles) {
+                 tile.analyze(tiles);
+             }
+
+             reset();
+
+             do {
+                 // dummy sleep to flush grid to the canvas
+                 await new Promise(r => setTimeout(r, 1));
+             } while (draw());
+             draw();
+         });
+        </script>
+
+    </body>
+</html>
